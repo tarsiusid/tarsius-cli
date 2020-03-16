@@ -1,0 +1,19 @@
+stack: "orcinus"
+services:
+  <service_name>:
+    image: "registry.gitlab.com/tarsiusid/tarsius/<service_name>:<CI_COMMIT>"
+    constraint: "node.role!=manager"
+    auth: true
+    environment:
+    - "TS_DB_HOST=db-worker"
+    - "TS_DB_USER=root" 
+    - "TS_DB_PASS="
+    - "TS_DB_NAME=tarsius"
+    - "TS_DB_PORT=26257"
+    - "TS_REDIS_HOSTS=redis:6379"
+    labels:
+      traefik.port: "8000"
+      traefik.docker.network: "orcinus"
+      traefik.frontend.rule: "Host:beta.tarsius.id\;PathPrefix:/apis/v1/<project_name>"
+      traefik.frontend.auth.forward.address: "http://auth:8000/validate"
+

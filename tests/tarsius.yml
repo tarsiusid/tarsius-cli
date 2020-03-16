@@ -1,0 +1,54 @@
+tables :
+  # Create table authors
+  author:
+    id:
+      type: serial
+      notNull: true
+      primaryKey: true
+    name:
+      type: varchar(100)
+      notNull: true
+    email:
+      type: varchar(150)
+      notNull: true
+    created:
+      type: timestamptz
+    updated:
+        type: timestamptz
+
+  # Create table posts
+  post:
+    id:
+      type: serial
+      notNull: true
+      primaryKey: true
+    title:
+      type: varchar(100)
+      notNull: true
+    content:
+      type: text
+    authorid:
+      type: author.id
+      notNull: true
+      isCascade: true
+    created:
+      type: timestamptz
+    updated:
+        type: timestamptz
+  
+
+# CREATE TABLE IF NOT EXISTS authors
+# (
+#     id serial PRIMARY KEY,
+#     name varchar(100) NOT NULL,
+#     email varchar(150) NOT NULL,
+#     created date
+# );
+# CREATE TABLE IF NOT EXISTS posts
+# (
+#     id serial PRIMARY KEY,
+#     title varchar(100) NOT NULL,
+#     content text NOT NULL,
+#     author_id int,
+#     created date
+# );

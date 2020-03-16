@@ -1,0 +1,658 @@
+package main
+
+import (
+	"database/sql"
+	"fmt"
+	"github.com/graphql-go/graphql"
+	"github.com/graphql-go/handler"
+	_ "github.com/lib/pq"
+	"net/http"
+	"time"
+	"os"
+	"strconv"
+	<% 
+	var isCached = false;
+	var listCache = [];
+	async function checkCache(arr){
+		for(const t of arr) { 
+			if(Object.keys(t.cache).length > 0){
+				isCached = true;
+			}
+		}
+	}
+	checkCache(data)
+	%>
+	<%if(isCached){%>
+	"errors"
+	"github.com/go-redis/redis"
+	"github.com/vmihailenco/msgpack"
+	"github.com/go-redis/cache"
+	"strings"
+	<%}%>
+)
+
+var (
+	DB_HOST	string
+	DB_PORT	string
+	DB_USER	string
+	DB_NAME	string
+	DB_PASSWORD	string
+	CORS_ORIGIN string
+	CORS_METHODS string
+	CORS_HEADERS string
+	<%if(isCached){%>
+	REDIS_HOSTS string
+	<%}%>
+)
+
+func getEnv(key, fallback string) string {
+    if value, ok := os.LookupEnv(key); ok {
+        return value
+    }
+    return fallback
+}
+
+<%
+String.prototype.capitalize = function() {
+    return this.charAt(0).toUpperCase() + this.slice(1);
+}
+%>
+<% data.forEach((t) => { %>
+type <%=t.table.capitalize()%> struct {
+    <% t.field.forEach((f) => { %><%= f.name.capitalize()%>   <%= f.type%>    `json:"<%= f.name%>"`
+    <%});%>
+}
+<%});%>
+
+func checkErr(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+<%if(isCached){%>
+func redisInit(hosts string) *redis.Ring {
+	redisHost := map[string]string{}
+	redisStringReplaceSpace := strings.Replace(hosts, " ", "", -1)
+	redisStringSplit := strings.Split(redisStringReplaceSpace, ";")
+	for i := range redisStringSplit {
+		var redisHostSplit = strings.Split(redisStringSplit[i], ":")
+		redisHost[redisHostSplit[0]] = ":" + redisHostSplit[1]
+	}
+
+	return redis.NewRing(&redis.RingOptions{
+		Addrs: redisHost,
+	})
+}
+
+func redisHosts(hosts string) *cache.Codec {
+	ring := redisInit(hosts)
+	return &cache.Codec{
+		Redis: ring,
+		Marshal: func(v interface{}) ([]byte, error) {
+			return msgpack.Marshal(v)
+		},
+		Unmarshal: func(b []byte, v interface{}) error {
+			return msgpack.Unmarshal(b, v)
+		},
+	}
+}
+
+func redisDeletePrefix(hosts string, keyPrefix string) (bool, error) {
+	ring := redisInit(hosts)
+	iter := ring.Scan(0, keyPrefix, 0).Iterator()
+	for iter.Next() {
+		err := ring.Del(iter.Val()).Err()
+		if err != nil {
+			return false, err
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func deleteCache(hosts string, key string) error {
+	codec := redisHosts(hosts)
+	return codec.Delete(key)
+}
+
+func isExistsCache(hosts string, key string) bool {
+	codec := redisHosts(hosts)
+	return codec.Exists(key)
+}
+<%data.forEach((t) => {%>
+<%if(t.cache.scopeRead){%>
+func setCache<%-t.table.capitalize()%>(hosts string, key string, obj *<%-t.table.capitalize()%>) (*<%-t.table.capitalize()%>, error) {
+	codec := redisHosts(hosts)
+	cached := &cache.Item{
+		Key:        key,
+		Object:     obj,
+		Expiration: time.Minute * <%-t.cache.scopeRead%>, //options
+	}
+
+	if err := codec.Set(cached); err == nil {
+		return obj, nil
+	}
+	return nil, errors.New("Check your redis connection")
+}
+
+func getCache<%-t.table.capitalize()%>(hosts string, key string) (*<%-t.table.capitalize()%>, error) {
+	codec := redisHosts(hosts)
+
+	var <%-t.table%> *<%-t.table.capitalize()%>
+	if err := codec.Get(key, &<%-t.table%>); err == nil {
+		return <%-t.table%>, nil
+	}
+	return nil, errors.New("Check your redis connection")
+}
+<%}%>
+<%if(t.cache.scopeList){%>
+func setCache<%-t.table.capitalize()%>s(hosts string, key string, obj []*<%-t.table.capitalize()%>) ([]*<%-t.table.capitalize()%>, error) {
+	codec := redisHosts(hosts)
+	cached := &cache.Item{
+		Key:        key,
+		Object:     obj,
+		Expiration: time.Minute * <%-t.cache.scopeList%>, //options
+	}
+
+	if err := codec.Set(cached); err == nil {
+		return obj, nil
+	}
+	return nil, errors.New("Check your redis connection")
+}
+
+func getCache<%-t.table.capitalize()%>s(hosts string, key string) ([]*<%-t.table.capitalize()%>, error) {
+	codec := redisHosts(hosts)
+
+	var <%-t.table%> []*<%-t.table.capitalize()%>
+	if err := codec.Get(key, &<%-t.table%>); err == nil {
+		return <%-t.table%>, nil
+	}
+	return nil, errors.New("Check your redis connection")
+}
+<%}%>
+<%});
+}%>
+func main() {
+	DB_HOST     = getEnv("TS_DB_HOST","127.0.0.1")
+	DB_PORT     = getEnv("TS_DB_PORT","26257")
+	DB_USER     = getEnv("TS_DB_USER","root")
+	DB_PASSWORD = getEnv("TS_DB_PASS","")
+	DB_NAME     = getEnv("TS_DB_NAME","tarsius")
+	CORS_ORIGIN        = getEnv("TS_CORS_ORIGIN","")
+	CORS_METHODS        = getEnv("TS_CORS_METHODS","POST, GET, PUT, DELETE, OPTIONS")
+	CORS_HEADERS        = getEnv("TS_CORS_HEADERS","Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+	<%if(isCached){%>
+	REDIS_HOSTS = getEnv("TS_REDIS_HOSTS", "127.0.0.1:6379")
+	<%}%>
+
+	db, err := sql.Open("postgres", fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME))
+	if err != nil {
+		checkErr(err)
+	}
+	if err = db.Ping(); err != nil {
+		checkErr(err)
+	}
+
+	defer db.Close()
+    <% data.forEach((t) => { %>
+    <%=t.table%>Type := graphql.NewObject(graphql.ObjectConfig{
+		Name:        "<%=t.table.capitalize()%>",
+		Description: "An <%=t.table.capitalize()%>",
+		Fields: graphql.Fields{
+			<% t.field.forEach((f) => { %>
+				<%if(f.relationField && f.relationTable){%>
+				"<%= f.name%>": &graphql.Field{
+					Type:        <%= f.relationTable %>Type,
+					Description: "The identifier of the <%= f.relationTable.capitalize() %>.",
+					Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+						if <%=t.table%>, ok := p.Source.(*<%=t.table.capitalize()%>); ok {
+							<%= f.relationTable %> := &<%= f.relationTable.capitalize() %>{}
+							err = db.QueryRow("select <%=f.relationListField.join(",")%> from <%= f.relationTable %> where <%= f.relationField %> = $1", <%=t.table%>.<%=f.name.capitalize()%>).Scan(<%-f.relationListField.map(x => "&"+f.relationTable+"."+x.capitalize()).join(",")%>)
+							checkErr(err)
+	
+							return <%= f.relationTable %>, nil
+						}
+	
+						return nil, nil
+					},
+				<%}else{%>
+                "<%= f.name%>": &graphql.Field{
+				<%if(f.notNull){%>
+				Type: graphql.NewNonNull(graphql.<%-f.graphQL.type%>),
+				<%}else{%>
+					Type: graphql.<%-f.graphQL.type%>,
+				<%}%>
+				Description: "The identifier of the <%= f.name%>.",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if <%=t.table%>, ok := p.Source.(*<%=t.table.capitalize()%>); ok {
+						return <%=t.table%>.<%=f.name.capitalize()%>, nil
+					}
+
+					return nil, nil
+				},
+				<%}%>
+            },<%});%>
+		},
+    })
+    <%});%>
+
+	rootQuery := graphql.NewObject(graphql.ObjectConfig{
+		Name: "RootQuery",
+		Fields: graphql.Fields{
+            <% data.forEach((t) => { %>
+            <% 
+            var field = []
+            var fieldCapitalize = []
+            var fieldDotTablePre = []
+            t.field.forEach((f) => { 
+                if(f.name != "created" && f.name != "updated"){
+                    field.push(f.name);
+                    fieldCapitalize.push(f.name.capitalize());
+                    fieldDotTablePre.push("&"+t.table+"."+f.name.capitalize());
+                }
+            })
+            var fieldDotTable = fieldDotTablePre.join(",");
+            %>
+			<%if(t.acls.indexOf('read') >= 0){%>
+			"<%=t.table%>": &graphql.Field{
+				Type:        <%=t.table%>Type,
+				Description: "Get an <%=t.table%>.",
+				Args: graphql.FieldConfigArgument{
+					"<%=field[0]%>": &graphql.ArgumentConfig{
+						Type: graphql.<%=t.field[0].type.capitalize()%>,
+					},
+				<%if(t.readParams.length > 0){
+					t.readParams.forEach((list)=>{
+				%>
+					"<%-list%>": &graphql.ArgumentConfig{
+						Type: graphql.<%-t.field[t.field.findIndex(obj => obj.name === list)].graphQL.type%>,
+					},
+				<%
+					});
+				}%>
+				},
+				Resolve: func(params graphql.ResolveParams) (interface{}, error) {
+					<%=field[0]%>, _ := params.Args["<%=field[0]%>"].(<%=t.field[0].type%>)
+					if <%=field[0]%> == "" {
+						<%=field[0]%> = "00000000-0000-0000-0000-000000000000"
+					}
+
+				<%if(t.readParams.length > 0){
+					t.readParams.forEach((list)=>{
+				%>
+					<%-list%>, _ := params.Args["<%-list%>"].(<%-t.field[t.field.findIndex(obj => obj.name === list)].type%>)
+				<%
+					});
+				}%>
+
+					<%=t.table%> := &<%=t.table.capitalize()%>{}
+					err = db.QueryRow("select <%=field.join(",")%> from <%=t.table%> where <%=field[0]%> = $1 <%if(t.readParams.length > 0){%>or <%-t.readParams.map((r,k)=>{return r+' = $'+(k+2)}).join('or')%> <%}%> limit 1", <%=field[0]%><%if(t.readParams.length > 0){%>, <%-t.readParams.join(",")%> <%}%>).Scan(<%- fieldDotTable%>)
+					checkErr(err)
+					<%if(isCached && t.cache.scopeRead){%>
+					key := "byId<%-t.table.capitalize()-%>:" + <%if(t.field[0].type == 'int'){%>strconv.Itoa(<%-field[0]%>)<%}else{%><%-field[0]%><%}%>
+					if isExistsCache(REDIS_HOSTS, key) {
+						if err := deleteCache(REDIS_HOSTS, key); err != nil {
+							panic(err)
+						}
+					}
+					<%}%>
+					return <%=t.table%>, nil
+				},
+			},
+			<%}%>
+			<%if(t.acls.indexOf('list') >= 0){%>
+			"<%=t.table%>s": &graphql.Field{
+				Type:        graphql.NewList(<%=t.table%>Type),
+				Args: graphql.FieldConfigArgument{
+					"page": &graphql.ArgumentConfig{
+						Type: graphql.Int,
+					},
+					"pageSize": &graphql.ArgumentConfig{
+						Type: graphql.Int,
+					},
+				<%if(t.listParams.length > 0){
+					t.listParams.forEach((list)=>{
+				%>
+					"<%-list%>": &graphql.ArgumentConfig{
+						Type: graphql.<%-t.field[t.field.findIndex(obj => obj.name === list)].graphQL.type%>,
+					},
+				<%
+					});
+				}%>
+				},
+				Description: "List of <%=t.table%>s.",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					page := 1
+					pageSize := 5
+					if p.Args["page"] != nil {
+						if p.Args["page"].(int) > 0 {
+							page, _ = p.Args["page"].(int)
+						}
+					}
+					if p.Args["pageSize"] != nil {
+						pageSize, _ = p.Args["pageSize"].(int)
+					}
+				<%if(t.listParams.length > 0){
+					t.listParams.forEach((list)=>{
+				%>
+					<%-list%> := ""
+					if p.Args["<%-list%>"] != nil {
+						<%-list%>, _ = p.Args["<%-list%>"].(<%-t.field[t.field.findIndex(obj => obj.name === list)].type%>)
+					}
+				<%
+					});
+				}%>
+
+					offset := (page * pageSize) - pageSize
+					var <%=t.table%>s []*<%=t.table.capitalize()%>
+					<%if(isCached && t.cache.scopeList){%>
+					redisKey := "<%-t.table.capitalize()%>:ALL&page=" + strconv.Itoa(page) + "&pageSize=" + strconv.Itoa(pageSize)
+					<%-t.table%>s, err := getCache<%-t.table.capitalize()%>s(REDIS_HOSTS, redisKey)
+					if err != nil {
+					<%}%>
+
+					<%if(t.listParams.length > 0){
+					%>
+					var rows *sql.Rows
+					var err error
+					if <%-t.listParams.map((param,index) => {return param+' != ""'}).join(' || ')%> {
+						rows, err = db.Query("SELECT <%=field.join(",")%> FROM <%=t.table%> where <%-t.listParams.map((param,index) => {return param+' = $'+(index+3)}).join(' or ')%> offset $1 limit $2;", offset, pageSize, <%-t.listParams.join(", ")%>)
+					}else{
+						rows, err = db.Query("SELECT id,title,content,authorid FROM post offset $1 limit $2;", offset, pageSize)
+					}
+					<%
+					}
+					else {
+					%>
+					rows, err := db.Query("SELECT <%=field.join(",")%> FROM <%=t.table%> offset " + strconv.Itoa(offset) + " limit " + strconv.Itoa(pageSize) + ";")
+					<%}%>
+					checkErr(err)
+
+					for rows.Next() {
+						<%=t.table%> := &<%=t.table.capitalize()%>{}
+
+						err = rows.Scan(<%- fieldDotTable%>)
+						checkErr(err)
+						<%=t.table%>s = append(<%=t.table%>s, <%=t.table%>)
+					}
+					<%if(isCached && t.cache.scopeList){%>
+						setCache<%-t.table.capitalize()%>s(REDIS_HOSTS, redisKey, <%-t.table%>s)
+					}
+					<%}%>
+					return <%=t.table%>s, nil
+				},
+            },
+			<%}%>
+            <%});%>
+		},
+	})
+
+	rootMutation := graphql.NewObject(graphql.ObjectConfig{
+		Name: "RootMutation",
+		Fields: graphql.Fields{
+            <% data.forEach((t) => { %>
+            <% 
+            var field = []
+            var fieldFull = []
+            var fieldCapitalize = []
+            var fieldDotTablePre = []
+			var fieldForSet = []
+			var fieldForValue = []
+            t.field.forEach((f,k) => { 
+                if(f.name != "created" && f.name != "updated"){
+					field.push(f.name);
+					fieldCapitalize.push(f.name.capitalize());
+					fieldDotTablePre.push("&"+t.table+"."+f.name.capitalize());
+				}
+				if(f.name != "created"){
+					fieldForSet.push(f.name)
+				}
+				fieldForValue.push("$"+k);
+                fieldFull.push(f.name);
+            })
+            var fieldDotTable = fieldDotTablePre.join(",");
+            %>
+			<%if(t.acls.indexOf('create') >= 0){%>
+			"create<%=t.table.capitalize()%>": &graphql.Field{
+				Type:        <%=t.table%>Type,
+				Description: "Create new <%=t.table.capitalize()%>",
+				Args: graphql.FieldConfigArgument{
+                    <% 
+                    t.field.forEach((f) => { 
+                    var name = f.name;
+                    var type = f.type;
+                    if(name != "id" && name != "created" && name != "updated"){
+                    %>
+					"<%=name%>": &graphql.ArgumentConfig{
+						Type: graphql.NewNonNull(graphql.<%-f.graphQL.type%>),
+					},
+                    <%
+                    }
+                    })%>
+				},
+				Resolve: func(params graphql.ResolveParams) (interface{}, error) {
+                    <% 
+                    t.field.forEach((f) => { 
+                    var name = f.name;
+                    var type = f.type;
+                    if(name != "id" && name != "created" && name != "updated"){
+                    %>
+					<%=name%>, _ := params.Args["<%=name%>"].(<%=type%>)
+                    <%
+                    }
+					%>
+					<% if(name == "created"){ %>
+					created := time.Now()
+					<% } %>
+					<% if(name == "updated"){ %>
+					updated := time.Now()
+					<% } %>
+					<%})%>
+
+					var lastInsert<%=fieldCapitalize[0]%> <%=t.field[0].type%>
+					err = db.QueryRow("INSERT INTO <%=t.table%>(<%=fieldFull.slice(1).join(",")%>) VALUES(<%=fieldForValue.slice(1).join(",")%>) returning <%=field[0]%>;", <%=fieldFull.slice(1).join(",")%>).Scan(&lastInsert<%=fieldCapitalize[0]%>)
+					checkErr(err)
+
+					new<%=t.table.capitalize()%> := &<%=t.table.capitalize()%>{
+                        <%=fieldCapitalize[0]%>:        lastInsert<%=fieldCapitalize[0]%>,
+                        <% 
+                        t.field.slice(1).forEach((f) => { 
+                        var name = f.name;
+                        var type = f.type;
+                        %>
+						<%=name.capitalize()%>: <%=name%>,
+                        <%
+                        })%>
+					}
+					<%if(isCached && t.cache.scopeCreate){%>
+					_, err := redisDeletePrefix(REDIS_HOSTS, "<%-t.table.capitalize()%>*")
+					if err != nil {
+						panic(err)
+					}
+					<%}%>
+					return new<%=t.table.capitalize()%>, nil
+				},
+			},
+			<%}%>
+			<%if(t.acls.indexOf('update') >= 0){%>
+			"update<%=t.table.capitalize()%>": &graphql.Field{
+				Type:        <%=t.table%>Type,
+				Description: "Update an <%=t.table.capitalize()%>",
+				Args: graphql.FieldConfigArgument{
+                    <% 
+                    t.field.forEach((f) => { 
+                    var name = f.name;
+					var type = f.type;
+                    if(name != "created" && name != "updated"){
+                    %>
+					"<%=name%>": &graphql.ArgumentConfig{
+						Type: graphql.NewNonNull(graphql.<%-f.graphQL.type%>),
+					},
+                    <%}})%>
+				},
+				Resolve: func(params graphql.ResolveParams) (interface{}, error) {
+                    <% 
+                    t.field.forEach((f) => { 
+                    var name = f.name;
+                    var type = f.type;
+                    if(name != "created" && name != "updated"){
+                    %>
+					<%=name%>, _ := params.Args["<%=name%>"].(<%=type%>)
+					<%} if(name == "updated"){ %>
+					updated := time.Now()
+					<% } %>
+					<%})%>
+
+					stmt, err := db.Prepare("UPDATE <%=t.table%> SET <%-fieldForSet.slice(1).map((v,k)=>{return v+" = $"+(k+1)}).join(",")%> WHERE <%=field[0]%> = $<%-fieldForSet.length%>")
+					checkErr(err)
+
+					_, err = stmt.Exec(<%-fieldForSet.slice(1).join(",")%>, <%=fieldFull[0]%>)
+					checkErr(err)
+
+					new<%=t.table.capitalize()%> := &<%=t.table.capitalize()%>{
+                        <% 
+                        t.field.forEach((f) => { 
+                        var name = f.name;
+                        var type = f.type;
+                        if(name != "created"){
+                        %>
+						<%=name.capitalize()%>:    <%=name%>,
+                        <%}})%>
+					}
+					<%if(isCached && t.cache.scopeUpdate){%>
+						<%if (t.cache.scopeList) {%>
+					doDelete, err := redisDeletePrefix(REDIS_HOSTS, "<%-t.table.capitalize()%>*")
+					if !doDelete && err != nil {
+						panic(err)
+					}
+						<%}%>
+						<%if (t.cache.scopeRead) {%>
+					key := "byId<%-t.table.capitalize()%>:" + <%if(t.field[0].type == 'int'){%>strconv.Itoa(<%-field[0]%>)<%}else{%><%-field[0]%><%}%>
+					if isExistsCache(REDIS_HOSTS, key) {
+						if err := deleteCache(REDIS_HOSTS, key); err != nil {
+							panic(err)
+						}
+					}
+						<%}%>
+					<%}%>
+
+					return new<%=t.table.capitalize()%>, nil
+				},
+			},
+			<%}%>
+			<%if(t.acls.indexOf('delete') >= 0){%>
+			"delete<%=t.table.capitalize()%>": &graphql.Field{
+				Type:        <%=t.table%>Type,
+				Description: "Delete an <%=t.table.capitalize()%>",
+				Args: graphql.FieldConfigArgument{
+					"<%=field[0]%>": &graphql.ArgumentConfig{
+						Type: graphql.<%=t.field[0].type.capitalize()%>,
+					},
+				},
+				Resolve: func(params graphql.ResolveParams) (interface{}, error) {
+					<%=field[0]%>, _ := params.Args["<%=field[0]%>"].(<%=t.field[0].type%>)
+
+					stmt, err := db.Prepare("DELETE FROM <%=t.table%> WHERE <%=field[0]%> = $1")
+					checkErr(err)
+
+					_, err = stmt.Exec(<%=field[0]%>)
+					checkErr(err)
+
+					<%if(isCached && t.cache.scopeUpdate){%>
+						<%if (t.cache.scopeList) {%>
+					doDelete, err := redisDeletePrefix(REDIS_HOSTS, "<%-t.table.capitalize()%>*")
+					if !doDelete && err != nil {
+						panic(err)
+					}
+						<%}%>
+						<%if (t.cache.scopeRead) {%>
+					key := "byId<%-t.table.capitalize()%>:" + <%if(t.field[0].type == 'int'){%>strconv.Itoa(<%-field[0]%>)<%}else{%><%-field[0]%><%}%>
+					if isExistsCache(REDIS_HOSTS, key) {
+						if err := deleteCache(REDIS_HOSTS, key); err != nil {
+							panic(err)
+						}
+					}
+						<%}%>
+					<%}%>
+
+					return nil, nil
+				},
+            },
+			<%}%>
+            <%});%>
+        },
+	})
+	schema, _ := graphql.NewSchema(graphql.SchemaConfig{
+		Query:    rootQuery,
+		Mutation: rootMutation,
+	})
+
+	h := handler.New(&handler.Config{
+		Schema:   &schema,
+		Pretty:   true,
+		GraphiQL: true,
+	})
+
+	//fs := http.FileServer(http.Dir("static"))
+	// serve HTTP
+	http.Handle("/", middleware(h))
+	http.Handle("/ide", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(page)
+	}))
+	http.ListenAndServe(":8000", nil)
+}
+
+func middleware(h http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if len(CORS_ORIGIN) > 0 {
+            w.Header().Set("Access-Control-Allow-Origin", CORS_ORIGIN)
+            w.Header().Set("Access-Control-Allow-Methods", CORS_METHODS)
+            w.Header().Set("Access-Control-Allow-Headers", CORS_HEADERS)
+        }
+        h.ServeHTTP(w, r)
+    })
+}
+
+var page = []byte(`
+<!DOCTYPE html>
+<html>
+	<head>
+		<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/graphiql/0.10.2/graphiql.css" />
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/fetch/1.1.0/fetch.min.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/react/15.5.4/react.min.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/react/15.5.4/react-dom.min.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/graphiql/0.10.2/graphiql.js"></script>
+	</head>
+	<body style="width: 100%; height: 100%; margin: 0; overflow: hidden;">
+		<div id="graphiql" style="height: 100vh;">Loading...</div>
+		<script>
+			function graphQLFetcher(graphQLParams) {
+				return fetch(location.href.replace("/ide",""), {
+					method: "post",
+					headers: {
+						'Accept': 'application/json',
+						'Content-Type': 'application/json',
+						'Authorization': 'Bearer f66aa7b3-add4-4fa2-88c8-534b2905c6ca'
+					},
+					body: JSON.stringify(graphQLParams),
+					credentials: "include",
+				}).then(function (response) {
+					return response.text();
+				}).then(function (responseBody) {
+					try {
+						return JSON.parse(responseBody);
+					} catch (error) {
+						return responseBody;
+					}
+				});
+			}
+			ReactDOM.render(
+				React.createElement(GraphiQL, {fetcher: graphQLFetcher}),
+				document.getElementById("graphiql")
+			);
+		</script>
+	</body>
+</html>
+`)

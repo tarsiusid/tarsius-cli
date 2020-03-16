@@ -1,0 +1,7 @@
+{
+    "templates": ["Dockerfile","app.json","Makefile",".dockerignore"],
+    "docker":{
+        "build":["make","build"]
+    },
+    "run": ["make","run-dev"]
+}

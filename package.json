@@ -1,0 +1,25 @@
+{
+  "name": "tarsius",
+  "version": "0.2.1",
+  "description": "Tarsius CLI Development Tools",
+  "main": "tarsius.js",
+  "bin": {
+    "tarsius": "./tarsius.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "sync:cli": "node cli-module-sync.js"
+  },
+  "author": "ibnu yahya <ibnu@tarsius.id>",
+  "license": "MIT",
+  "dependencies": {
+    "async": "^2.6.1",
+    "colors": "^1.3.2",
+    "commander": "^2.19.0",
+    "ejs": "^2.6.1",
+    "inquirer": "^6.2.0",
+    "js-yaml": "^3.12.0",
+    "pg": "^7.6.0",
+    "shelljs": "^0.8.2"
+  }
+}

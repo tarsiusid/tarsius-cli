@@ -1,0 +1,8 @@
+go.mod
+go.sum
+vendor
+app.json
+Dockerfile
+Makefile
+main.go
+<project_name>
